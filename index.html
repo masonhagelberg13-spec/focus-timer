@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focus Timer</title>
+<style>
+  :root {
+    --bg: #f6f4ef; --card: #ffffff; --ink: #1f1d1a; --muted: #7a756c;
+    --accent: #d9534f; --break: #3a8f6b; --line: #e6e1d8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171614; --card: #22211e; --ink: #f1ede6; --muted: #9a948a; --line: #34322e; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center; padding: 40px 16px;
+  }
+  main { width: 100%; max-width: 420px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 24px; margin-bottom: 16px; }
+  .modes { display: flex; gap: 8px; justify-content: center; margin-bottom: 8px; }
+  .modes button { background: none; border: 1px solid var(--line); color: var(--muted); }
+  .modes button.on { color: var(--ink); border-color: var(--ink); }
+  .ring { position: relative; width: 240px; height: 240px; margin: 12px auto; }
+  .ring svg { transform: rotate(-90deg); }
+  .ring circle { fill: none; stroke-width: 10; }
+  .ring .track { stroke: var(--line); }
+  .ring .bar { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .3s linear, stroke .3s; }
+  body.break .ring .bar { stroke: var(--break); }
+  .time { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; }
+  .time b { font-size: 56px; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .time span { color: var(--muted); font-size: 14px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .controls { display: flex; gap: 8px; justify-content: center; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 999px; padding: 8px 16px;
+    border: 1px solid transparent; background: var(--ink); color: var(--bg);
+  }
+  button.ghost { background: none; color: var(--ink); border-color: var(--line); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stats { display: flex; justify-content: space-around; text-align: center; }
+  .stats b { display: block; font-size: 24px; }
+  .stats small { color: var(--muted); }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; }
+  form { display: flex; gap: 8px; margin-bottom: 12px; }
+  input {
+    flex: 1; font: inherit; padding: 8px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+  li:first-child { border-top: none; }
+  li .txt { flex: 1; overflow-wrap: anywhere; }
+  li.top .txt { font-weight: 600; }
+  li.top .txt::before { content: "▶ "; color: var(--accent); }
+  li.done .txt { text-decoration: line-through; color: var(--muted); }
+  li button { background: none; color: var(--muted); padding: 2px 8px; border: none; }
+  li button:hover { color: var(--ink); }
+  .empty { color: var(--muted); font-size: 14px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <div class="modes">
+      <button data-mode="focus" class="on">Focus 25</button>
+      <button data-mode="short">Break 5</button>
+      <button data-mode="long">Long 15</button>
+    </div>
+    <div class="ring">
+      <svg width="240" height="240" viewBox="0 0 240 240">
+        <circle class="track" cx="120" cy="120" r="110"/>
+        <circle class="bar" id="bar" cx="120" cy="120" r="110"/>
+      </svg>
+      <div class="time"><b id="clock">25:00</b><span id="label">Add a task below</span></div>
+    </div>
+    <div class="controls">
+      <button id="toggle">Start</button>
+      <button id="reset" class="ghost">Reset</button>
+      <button id="skip" class="ghost">Skip</button>
+    </div>
+  </section>
+
+  <section class="card stats">
+    <div><b id="today">0</b><small>sessions today</small></div>
+    <div><b id="streak">0</b><small>day streak</small></div>
+    <div><b id="minutes">0</b><small>focus min today</small></div>
+  </section>
+
+  <section class="card">
+    <h2>Task stack</h2>
+    <form id="add"><input id="newTask" placeholder="What's next?" autocomplete="off"><button>Add</button></form>
+    <ul id="tasks"></ul>
+    <details><summary>Done (<span id="doneCount">0</span>)</summary><ul id="done"></ul></details>
+  </section>
+</main>
+
+<script>
+const MODES = { focus: 25, short: 5, long: 15 };
+const $ = id => document.getElementById(id);
+const CIRC = 2 * Math.PI * 110;
+$('bar').style.strokeDasharray = CIRC;
+
+// ---- persisted state ----
+const load = () => { try { return JSON.parse(localStorage.getItem('focus-timer')) || {}; } catch { return {}; } };
+const saved = load();
+const state = {
+  tasks: saved.tasks || [],
+  done: saved.done || [],
+  log: saved.log || {},          // { "YYYY-MM-DD": sessionCount }
+  focusCount: saved.focusCount || 0, // sessions since last long break
+};
+const save = () => { try { localStorage.setItem('focus-timer', JSON.stringify(state)); } catch {} };
+
+// ---- timer ----
+let mode = 'focus', total = MODES.focus * 60, remaining = total, endAt = null, tick = null;
+
+function setMode(m) {
+  stop();
+  mode = m; total = MODES[m] * 60; remaining = total;
+  document.body.classList.toggle('break', m !== 'focus');
+  document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  render();
+}
+function start() {
+  endAt = Date.now() + remaining * 1000;
+  tick = setInterval(update, 250);
+  $('toggle').textContent = 'Pause';
+}
+function stop() {
+  clearInterval(tick); tick = null; endAt = null;
+  $('toggle').textContent = 'Start';
+}
+function update() {
+  remaining = Math.max(0, Math.round((endAt - Date.now()) / 1000));
+  render();
+  if (remaining === 0) finish();
+}
+function finish(skipped = false) {
+  stop();
+  if (!skipped) chime();
+  if (mode === 'focus' && skipped) {
+    setMode('short');
+  } else if (mode === 'focus') {
+    const key = dayKey(new Date());
+    state.log[key] = (state.log[key] || 0) + 1;
+    state.focusCount++;
+    if (state.tasks.length) state.done.unshift(state.tasks.shift());
+    save(); renderTasks();
+    setMode(state.focusCount % 4 === 0 ? 'long' : 'short');
+  } else {
+    setMode('focus');
+  }
+}
+
+// ---- rendering ----
+function fmt(s) { return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+function render() {
+  $('clock').textContent = fmt(remaining);
+  $('bar').style.strokeDashoffset = CIRC * (1 - remaining / total);
+  $('label').textContent = mode === 'focus' ? (state.tasks[0] || 'Add a task below') : 'Take a breather';
+  document.title = (tick ? fmt(remaining) + ' · ' : '') + 'Focus Timer';
+  renderStats();
+}
+function dayKey(d) { return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+function renderStats() {
+  const today = state.log[dayKey(new Date())] || 0;
+  let streak = 0; const d = new Date();
+  if (!today) d.setDate(d.getDate() - 1); // streak still alive if yesterday counted
+  while (state.log[dayKey(d)]) { streak++; d.setDate(d.getDate() - 1); }
+  $('today').textContent = today;
+  $('streak').textContent = streak;
+  $('minutes').textContent = today * MODES.focus;
+}
+function renderTasks() {
+  const ul = $('tasks'); ul.innerHTML = '';
+  if (!state.tasks.length) ul.innerHTML = '<li class="empty">Nothing queued. The top task is what you work on next.</li>';
+  state.tasks.forEach((t, i) => {
+    const li = document.createElement('li');
+    if (i === 0) li.className = 'top';
+    li.innerHTML = '<span class="txt"></span>';
+    li.firstChild.textContent = t;
+    li.append(
+      btn('↑', 'Move up', () => { if (i) { [state.tasks[i-1], state.tasks[i]] = [state.tasks[i], state.tasks[i-1]]; commit(); } }),
+      btn('✓', 'Mark done', () => { state.done.unshift(state.tasks.splice(i, 1)[0]); commit(); }),
+      btn('×', 'Delete', () => { state.tasks.splice(i, 1); commit(); }),
+    );
+    ul.append(li);
+  });
+  const dl = $('done'); dl.innerHTML = '';
+  state.done.slice(0, 20).forEach(t => {
+    const li = document.createElement('li'); li.className = 'done';
+    li.innerHTML = '<span class="txt"></span>'; li.firstChild.textContent = t; dl.append(li);
+  });
+  $('doneCount').textContent = state.done.length;
+  render();
+}
+function btn(label, title, fn) {
+  const b = document.createElement('button'); b.textContent = label; b.title = title; b.setAttribute('aria-label', title);
+  b.onclick = fn; return b;
+}
+function commit() { save(); renderTasks(); }
+
+// ---- sound ----
+function chime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [660, 880, 990].forEach((f, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime + i * 0.18;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.2, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      o.start(t); o.stop(t + 0.5);
+    });
+  } catch {}
+}
+
+// ---- wiring ----
+$('toggle').onclick = () => tick ? (update(), stop()) : start();
+$('reset').onclick = () => setMode(mode);
+$('skip').onclick = () => finish(true);
+document.querySelectorAll('.modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+$('add').onsubmit = e => {
+  e.preventDefault();
+  const v = $('newTask').value.trim();
+  if (v) { state.tasks.push(v); $('newTask').value = ''; commit(); }
+};
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && e.target.tagName !== 'INPUT') { e.preventDefault(); $('toggle').click(); }
+});
+
+renderTasks();
+</script>
+</body>
+</html>
