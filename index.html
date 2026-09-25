@@ -109,7 +109,7 @@ const saved = load();
 const state = {
   tasks: saved.tasks || [],
   done: saved.done || [],
-  log: saved.log || {},          // { "YYYY-MM-DD": sessionCount }
+  log: saved.log || {},          // { "YYYY-M-D": sessionCount } (not zero-padded; see dayKey)
   focusCount: saved.focusCount || 0, // sessions since last long break
 };
 const save = () => { try { localStorage.setItem('focus-timer', JSON.stringify(state)); } catch {} };
